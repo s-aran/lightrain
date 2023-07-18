@@ -1,5 +1,5 @@
 use std::{
-    borrow::{Borrow, BorrowMut},
+    borrow::{Borrow, BorrowMut, Cow},
     rc::Rc,
 };
 
@@ -85,7 +85,7 @@ fn walk(handle: &Handle, working: &mut Working) {
     }
 }
 
-fn create_script() -> Handle {
+fn create_script(path: &str) -> Handle {
     let script: Handle = Node::new(NodeData::Element {
         name: QualName::new(None, ns!(html), local_name!("script")),
         attrs: vec![
@@ -95,7 +95,7 @@ fn create_script() -> Handle {
             },
             Attribute {
                 name: QualName::new(None, ns!(), local_name!("src")),
-                value: "test.js".into(),
+                value: path.into(),
             },
         ]
         .into(),
@@ -117,11 +117,19 @@ fn create_script() -> Handle {
     script
 }
 
-fn main() {
-    let source_html = r#"<!DOCTYPE html><head><meta charset="utf-8"><title>test</title></head><body><h1>hello</h1></body></html>"#.to_owned();
+fn append_script_tag(rcdom: &mut RcDom, path: &str) {
+    let mut working: Working = Default::default();
+    walk(&rcdom.get_document(), &mut working);
 
+    let script = create_script(path);
+    rcdom.append(
+        &working.meta.unwrap(),
+        html5ever::tree_builder::AppendNode(script),
+    );
+}
+
+fn parse_html(source_html: String) -> Result<RcDom, std::io::Error> {
     let mut a = source_html.as_bytes();
-
     let rcdom_sink = RcDom::default();
     let opts = ParseOpts {
         tree_builder: TreeBuilderOpts {
@@ -132,26 +140,28 @@ fn main() {
         ..Default::default()
     };
 
-    let mut rcdom = parse_document(rcdom_sink, opts)
+    parse_document(rcdom_sink, opts)
         .from_utf8()
         .read_from(&mut a)
-        .unwrap();
+}
 
-    let mut working: Working = Default::default();
-    walk(&rcdom.get_document(), &mut working);
-
-    let script = create_script();
-    rcdom.append(
-        &working.meta.unwrap(),
-        html5ever::tree_builder::AppendNode(script),
-    );
-
+fn serialize(rcdom: &mut RcDom) -> String {
     let document: SerializableHandle = rcdom.get_document().into();
     let mut bytes = vec![];
     serialize::serialize(&mut bytes, &document, Default::default())
         .ok()
         .expect("serialization failed");
-    let result = String::from_utf8_lossy(&bytes);
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn main() {
+    let source_html = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>test</title></head><body><h1>hello</h1></body></html>"#.to_owned();
+
+    let mut rcdom = parse_html(source_html).unwrap();
+    append_script_tag(&mut rcdom, "test.js");
+
+    let result = serialize(&mut rcdom);
+
     println!("{}", result);
     println!("----------------------------------------");
 }
@@ -163,63 +173,18 @@ mod tests {
     };
     use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
+    use crate::{append_script_tag, parse_html, serialize};
+
     #[test]
     fn test_1() {
-        let source_html = r#"<!DOCTYPE html><head><meta charset="utf-8"><title>test</title></head><body><h1>hello</h1></body></html>"#.to_owned();
+        let source_html = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>test</title></head><body><h1>hello</h1></body></html>"#.to_owned();
+        let expected_html = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>test</title><script type="text/javascript" src="./test.js"></script></head><body><h1>hello</h1></body></html>"#.to_owned();
 
-        let mut a = source_html.as_bytes();
+        let mut rcdom = parse_html(source_html).unwrap();
+        let path = "./test.js";
+        append_script_tag(&mut rcdom, path);
+        let result = serialize(&mut rcdom);
 
-        let rcdom_sink = RcDom::default();
-        let opts = ParseOpts {
-            tree_builder: TreeBuilderOpts {
-                scripting_enabled: false,
-                drop_doctype: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let rcdom = parse_document(rcdom_sink, opts)
-            .from_utf8()
-            .read_from(&mut a)
-            .unwrap();
-
-        let mut working: Working = Default::default();
-        walk(&rcdom.document, &mut working);
-
-        assert!(false)
-    }
-
-    #[derive(Debug)]
-    struct Working {
-        pub is_meta: bool,
-    }
-
-    impl Default for Working {
-        fn default() -> Self {
-            Self { is_meta: false }
-        }
-    }
-
-    fn walk(handle: &Handle, working: &mut Working) {
-        if let NodeData::Element {
-            ref name,
-            ref attrs,
-            ..
-        } = handle.data
-        {
-            match name.local.as_ref() {
-                "meta" => {
-                    eprintln!("meta ==>");
-                    working.is_meta = true;
-                }
-                _ => {
-                    if working.is_meta {
-                        working.is_meta = false;
-                        println!("<== meta");
-                    }
-                }
-            }
-        }
+        assert_eq!(expected_html, result);
     }
 }

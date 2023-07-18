@@ -44,8 +44,6 @@ fn walk(handle: &Handle, working: &mut Working) {
         ..
     } = handle.data
     {
-        println!("{}", name.local.as_ref());
-
         match name.local.as_ref() {
             "meta" => {
                 eprintln!("meta ==>");
@@ -57,7 +55,7 @@ fn walk(handle: &Handle, working: &mut Working) {
             }
             _ => {
                 if working.is_meta {
-                    working.meta = Some(handle.clone());
+                    // working.meta = Some(handle.clone());
                     working.is_meta = false;
                     println!("<== meta");
                 }
@@ -67,6 +65,22 @@ fn walk(handle: &Handle, working: &mut Working) {
 
     let children = handle.children.borrow();
     for (i, child) in children.iter().enumerate() {
+        match handle.data {
+            NodeData::Element { ref name, .. } => {
+                println!(
+                    "{}/{}: {}",
+                    i,
+                    handle.children.borrow().len() - 1,
+                    name.local.as_ref()
+                );
+
+                if working.is_meta && i == handle.children.borrow().len() - 1 {
+                    working.meta = Some(handle.clone());
+                }
+            }
+            _ => {}
+        };
+
         walk(child, working);
     }
 }
@@ -127,7 +141,7 @@ fn main() {
     walk(&rcdom.get_document(), &mut working);
 
     let script = create_script();
-    rcdom.append_before_sibling(
+    rcdom.append(
         &working.meta.unwrap(),
         html5ever::tree_builder::AppendNode(script),
     );

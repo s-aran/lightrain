@@ -17,7 +17,6 @@ use html5ever::{
 
 use markup5ever::{interface::TreeSink, local_name, namespace_url, ns, QualName};
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
-use regex::bytes::Regex;
 
 #[derive(Debug)]
 struct Working {
@@ -186,7 +185,7 @@ fn handle_connection(mut stream: TcpStream) {
 }
 
 fn get_filename_from_get_request(request: &[u8]) -> String {
-    let re = Regex::new(r"^GET\s+(.+)\s+HTTP/1.1").unwrap();
+    let re = regex::bytes::Regex::new(r"^GET\s+(.+)\s+HTTP/1.1").unwrap();
     let caps = re.captures(request).unwrap();
     let filename_match = caps.get(1).unwrap();
     let filename = filename_match.as_bytes();
@@ -241,15 +240,15 @@ mod tests {
     #[test]
     fn test_get_filename_from_get_request() {
         let request_1 = b"GET /test.html HTTP/1.1\r\n";
-        assert_eq!("/test.html", get_filename_from_get_request(request_1));
+        assert_eq!("./test.html", get_filename_from_get_request(request_1));
 
         let request_2 = b"GET /script/%E3%82%BD%E3%83%BC%E3%82%B9%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.js HTTP/1.1\r\n";
         assert_eq!(
-            "/script/ソースファイル.js",
+            "./script/ソースファイル.js",
             get_filename_from_get_request(request_2)
         );
 
         let request_3 = b"GET / HTTP/1.1\r\n";
-        assert_eq!("/", get_filename_from_get_request(request_3));
+        assert_eq!("./", get_filename_from_get_request(request_3));
     }
 }

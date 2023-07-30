@@ -3,9 +3,12 @@ use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
-#[cfg(feature = "alloc")]
-use encoding_rs::*;
+use actix::prelude::*;
+use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web_actors::ws;
 
 use html5ever::{
     parse_document,
@@ -194,17 +197,116 @@ fn get_filename_from_get_request(request: &[u8]) -> String {
     format!(".{}", String::from_utf8_lossy(&decoded).to_string())
 }
 
-fn main() {
+fn is_expected_hello(message: &String, expected_type: &str) -> bool {
+    let re = regex::Regex::new(r"^Hello (.+)$").unwrap();
+    let caps = re.captures(&message).unwrap();
+    match caps.get(1) {
+        Some(hello) => {
+            if hello.as_str() == expected_type {
+                return true;
+            }
+        }
+        _ => return false,
+    }
+
+    false
+}
+
+fn is_client_hello(message: &String) -> bool {
+    is_expected_hello(message, "client")
+}
+
+fn is_operator_hello(message: &String) -> bool {
+    is_expected_hello(message, "operator")
+}
+
+pub struct LightrainWebsocketServer {
+    hb: Instant,
+}
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl LightrainWebsocketServer {
+    pub fn new() -> Self {
+        Self { hb: Instant::now() }
+    }
+
+    fn heartbeat(&self, ctx: &mut <Self as Actor>::Context) {
+        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
+            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
+                println!("Websocket Clietn heartbeat failed, disconnecting!");
+
+                ctx.stop();
+
+                return;
+            }
+
+            ctx.ping(b"");
+        });
+    }
+}
+
+impl Actor for LightrainWebsocketServer {
+    type Context = ws::WebsocketContext<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        self.heartbeat(ctx);
+    }
+}
+
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LightrainWebsocketServer {
+    fn handle(&mut self, item: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
+        println!("WS: {item:?}");
+
+        match item {
+            Ok(ws::Message::Ping(msg)) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
+            }
+            Ok(ws::Message::Pong(_)) => {
+                self.hb = Instant::now();
+            }
+            Ok(ws::Message::Text(text)) => ctx.text(text),
+            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
+            Ok(ws::Message::Close(reason)) => {
+                ctx.close(reason);
+                ctx.stop();
+            }
+            _ => ctx.stop(),
+        }
+    }
+}
+
+async fn echo_ws(request: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+    ws::start(LightrainWebsocketServer::new(), &request, stream)
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     println!("Hello, world!");
 
-    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    thread::spawn(|| {
+        let listener = TcpListener::bind("127.0.0.1:5775").unwrap();
+        for s in listener.incoming() {
+            thread::spawn(|| {
+                let stream = s.unwrap();
 
-    for s in listener.incoming() {
-        let stream = s.unwrap();
+                println!("connection established");
+                handle_connection(stream);
+            });
+        }
+    });
 
-        println!("connection established");
-        handle_connection(stream);
-    }
+    HttpServer::new(|| {
+        App::new()
+            .service(web::resource("/").route(web::get().to(echo_ws)))
+            .wrap(middleware::Logger::default())
+    })
+    .workers(2)
+    .bind("127.0.0.1:5776")?
+    .run()
+    .await
 }
 
 #[cfg(test)]

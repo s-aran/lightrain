@@ -3,11 +3,17 @@ use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use actix::prelude::*;
-use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_files::Files;
+use actix_files::NamedFile;
+use actix_web::http::header::ContentDisposition;
+use actix_web::http::header::DispositionType;
+use actix_web::Responder;
+use actix_web::{get, middleware, route, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 
 use html5ever::{
@@ -150,7 +156,7 @@ fn make_response_from_file(filepath: &Path, injection: Option<bool>) -> String {
         _ => contents,
     };
 
-    format!("HTTP/1.1 200 OK\r\n\r\n{}", res)
+    res
 }
 
 fn handle_connection(mut stream: TcpStream) {
@@ -278,6 +284,46 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LightrainWebsocke
     }
 }
 
+#[get("/")]
+async fn index(request: HttpRequest) -> impl Responder {
+    let filename = "index.html";
+    let filepath = Path::new(filename);
+    let response = make_response_from_file(filepath, Some(true));
+
+    HttpResponse::Ok().body(response)
+}
+
+#[get("/favicon.ico")]
+async fn favicon() -> impl Responder {
+    HttpResponse::Ok().content_type("image/x-icon").body("")
+}
+
+#[get("/{filename}")]
+async fn others(request: HttpRequest) -> impl Responder {
+    let filename = request.match_info().get("filename").unwrap();
+
+    println!("{}", filename);
+
+    let filepath = Path::new(filename);
+    let response = make_response_from_file(filepath, Some(true));
+
+    HttpResponse::Ok().body(response)
+}
+
+#[get("/script/{filename:.*\\.js}")]
+async fn script_index(request: HttpRequest) -> Result<NamedFile, Error> {
+    let base = Path::new("script");
+    let path: PathBuf = request.match_info().query("filename").parse().unwrap();
+    let file = NamedFile::open(base.join(path))?;
+    Ok(file
+        .use_last_modified(true)
+        .set_content_disposition(ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![],
+        }))
+}
+
+#[route("/**lightrain_controller**/", method = "GET")]
 async fn echo_ws(request: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     ws::start(LightrainWebsocketServer::new(), &request, stream)
 }
@@ -286,24 +332,18 @@ async fn echo_ws(request: HttpRequest, stream: web::Payload) -> Result<HttpRespo
 async fn main() -> std::io::Result<()> {
     println!("Hello, world!");
 
-    thread::spawn(|| {
-        let listener = TcpListener::bind("127.0.0.1:5775").unwrap();
-        for s in listener.incoming() {
-            thread::spawn(|| {
-                let stream = s.unwrap();
-
-                println!("connection established");
-                handle_connection(stream);
-            });
-        }
-    });
-
     HttpServer::new(|| {
         App::new()
-            .service(web::resource("/").route(web::get().to(echo_ws)))
+            .service(index)
+            .service(favicon)
+            .service(others)
+            .service(script_index)
+            // .service(Files::new("/", ".").index_file("index.html"))
+            // .service(web::resource("/**lightrain_controller**/").route(web::get().to(echo_ws)))
+            .service(echo_ws)
             .wrap(middleware::Logger::default())
     })
-    .workers(2)
+    .workers(3)
     .bind("127.0.0.1:5776")?
     .run()
     .await

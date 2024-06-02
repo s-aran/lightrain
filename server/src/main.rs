@@ -1,19 +1,15 @@
 use std::fs::File;
 use std::io::prelude::*;
-use std::net::TcpListener;
-use std::net::TcpStream;
-use std::path::Path;
-use std::path::PathBuf;
-use std::thread;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use actix::prelude::*;
-use actix_files::Files;
 use actix_files::NamedFile;
-use actix_web::http::header::ContentDisposition;
-use actix_web::http::header::DispositionType;
-use actix_web::Responder;
-use actix_web::{get, middleware, route, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::dev::Server;
+use actix_web::http::header::{ContentDisposition, DispositionType};
+use actix_web::{
+    get, middleware, route, web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder,
+};
 use actix_web_actors::ws;
 
 use html5ever::{
@@ -26,6 +22,17 @@ use html5ever::{
 
 use markup5ever::{interface::TreeSink, local_name, namespace_url, ns, QualName};
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
+use serde::{Deserialize, Serialize};
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Message(pub String);
+
+#[derive(Message)]
+#[rtype(usize)]
+pub struct Connect {
+    pub addr: Recipient<Message>,
+}
 
 #[derive(Debug)]
 struct Working {
@@ -40,6 +47,74 @@ impl Default for Working {
             head: Default::default(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum Command {
+    NoOperation,
+
+    Hello { type_name: String },
+    Reload,
+
+    Ping,
+
+    Echo { id: u64, message: String },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum CommandResult {
+    NoOperation,
+
+    Hello {
+        id: u64,
+    },
+    Reload,
+
+    Ping,
+
+    Echo {
+        id: u64,
+        from_id: u64,
+        message: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ControllerCommandRequest {
+    id: u64,
+    controller_id: u32,
+    from_ip_address: String,
+    from_port_number: u32,
+    command: Command,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ControllerCommandResponse {
+    id: u64,
+    controller_id: u32,
+    from_ip_address: String,
+    from_port_number: u32,
+    result: CommandResult,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ClientCommandRequest {
+    id: u64,
+    client_id: u32,
+    from_ip_address: String,
+    from_port_number: u32,
+    from_controller_id: u64,
+    command: Command,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ClientCommandResponse {
+    id: u64,
+    client_id: u32,
+    from_ip_address: String,
+    from_port_number: u32,
+    from_controller_id: u64,
+    result: CommandResult,
 }
 
 fn walk(handle: &Handle, working: &mut Working) {
@@ -159,73 +234,6 @@ fn make_response_from_file(filepath: &Path, injection: Option<bool>) -> String {
     res
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let mut buffer = [0; 1024];
-    stream.read(&mut buffer).unwrap();
-
-    println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
-
-    let filepath = get_filename_from_get_request(&buffer);
-    let path = Path::new(&filepath);
-    if path.exists() && path.is_file() {
-        let response = make_response_from_file(&path, Some(true));
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-        return;
-    }
-
-    let index_path = Path::new("index.html");
-    if path.exists() && path.is_dir() && index_path.exists() {
-        let response = make_response_from_file(&index_path, Some(true));
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-    } else {
-        let status_line = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
-        let mut file = File::open("404.html").unwrap();
-        let mut contents = String::new();
-
-        file.read_to_string(&mut contents).unwrap();
-
-        let response = format!("{}{}", status_line, contents);
-
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-    }
-}
-
-fn get_filename_from_get_request(request: &[u8]) -> String {
-    let re = regex::bytes::Regex::new(r"^GET\s+(.+)\s+HTTP/1.1").unwrap();
-    let caps = re.captures(request).unwrap();
-    let filename_match = caps.get(1).unwrap();
-    let filename = filename_match.as_bytes();
-
-    let decoded = urlencoding::decode_binary(filename);
-    format!(".{}", String::from_utf8_lossy(&decoded).to_string())
-}
-
-fn is_expected_hello(message: &String, expected_type: &str) -> bool {
-    let re = regex::Regex::new(r"^Hello (.+)$").unwrap();
-    let caps = re.captures(&message).unwrap();
-    match caps.get(1) {
-        Some(hello) => {
-            if hello.as_str() == expected_type {
-                return true;
-            }
-        }
-        _ => return false,
-    }
-
-    false
-}
-
-fn is_client_hello(message: &String) -> bool {
-    is_expected_hello(message, "client")
-}
-
-fn is_operator_hello(message: &String) -> bool {
-    is_expected_hello(message, "operator")
-}
-
 pub struct LightrainWebsocketServer {
     hb: Instant,
 }
@@ -261,6 +269,16 @@ impl Actor for LightrainWebsocketServer {
     }
 }
 
+impl Handler<Connect> for LightrainWebsocketServer {
+    type Result = usize;
+
+    fn handle(&mut self, msg: Connect, ctx: &mut Self::Context) -> Self::Result {
+        println!("connect");
+
+        0
+    }
+}
+
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LightrainWebsocketServer {
     fn handle(&mut self, item: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         println!("WS: {item:?}");
@@ -273,7 +291,19 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LightrainWebsocke
             Ok(ws::Message::Pong(_)) => {
                 self.hb = Instant::now();
             }
-            Ok(ws::Message::Text(text)) => ctx.text(text),
+            Ok(ws::Message::Text(text)) => {
+                // let request = match serde_json::from_str(&text) {
+                //     Ok(j) => {}
+                //     Err(e) => {
+                //         eprintln!("Error: {e}: {text}");
+                //         return ctx.text("");
+                //     }
+                // };
+
+                // println!("??: {:?}", item.unwrap());
+
+                return ctx.text(text);
+            }
             Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
             Ok(ws::Message::Close(reason)) => {
                 ctx.close(reason);
@@ -328,10 +358,7 @@ async fn echo_ws(request: HttpRequest, stream: web::Payload) -> Result<HttpRespo
     ws::start(LightrainWebsocketServer::new(), &request, stream)
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    println!("Hello, world!");
-
+fn run_server(bind: &String, workers: usize) -> Server {
     HttpServer::new(|| {
         App::new()
             .service(index)
@@ -343,15 +370,23 @@ async fn main() -> std::io::Result<()> {
             .service(echo_ws)
             .wrap(middleware::Logger::default())
     })
-    .workers(3)
-    .bind("127.0.0.1:5776")?
+    .workers(workers)
+    .bind(bind)
+    .unwrap()
     .run()
-    .await
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    println!("Hello, world!");
+    run_server(&"127.0.0.1:5776".to_owned(), 3).await
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{append_script_tag, get_filename_from_get_request, parse_html, serialize};
+    use actix_web::App;
+
+    use crate::{append_script_tag, echo_ws, parse_html, serialize};
 
     #[test]
     fn test_append_script_tag_without_script_elements() {
@@ -379,18 +414,41 @@ mod tests {
         assert_eq!(expected_html, result);
     }
 
-    #[test]
-    fn test_get_filename_from_get_request() {
-        let request_1 = b"GET /test.html HTTP/1.1\r\n";
-        assert_eq!("./test.html", get_filename_from_get_request(request_1));
+    // async fn _send_by_ws(target: &str, msg: &str) -> String {
+    //     let (_, mut conn) = match awc::Client::new().ws(target).connect().await {
+    //         Ok(result) => result,
+    //         Err(err) => {
+    //             eprintln!("Error: {}", err.to_string());
+    //             return "".to_owned();
+    //         }
+    //     };
 
-        let request_2 = b"GET /script/%E3%82%BD%E3%83%BC%E3%82%B9%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.js HTTP/1.1\r\n";
-        assert_eq!(
-            "./script/ソースファイル.js",
-            get_filename_from_get_request(request_2)
-        );
+    //     conn.send(ws::Message::Text(msg.into())).await.unwrap();
+    //     while let Some(Ok(Frame::Text(response))) = conn.next().await {
+    //         return String::from_utf8_lossy(&response).to_string();
+    //     }
 
-        let request_3 = b"GET / HTTP/1.1\r\n";
-        assert_eq!("./", get_filename_from_get_request(request_3));
+    //     "".to_owned()
+    // }
+
+    // async fn send_by_ws(target: &str, msg: &str) -> String {
+    //     let a = _send_by_ws(target, msg);
+    //     join!(a).0
+    // }
+
+    #[actix_rt::test]
+    async fn test_ws_1() {
+        let addr = "127.0.0.1:15776";
+        let _url = format!("ws://{}/**lightrain_controller**/", addr);
+        let url = _url.as_str();
+
+        // let app = actix_web::test::init_service(App::new().service(echo_ws)).await;
+        let app = actix_web::test::init_service(App::new().service(echo_ws)).await;
+        let req = actix_web::test::TestRequest::default()
+            .set_payload("Client Hello".as_bytes())
+            .to_request();
+        let res = actix_web::test::call_service(&app, req).await;
+        print!("{:?}", res);
+        assert!(false);
     }
 }

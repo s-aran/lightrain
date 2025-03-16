@@ -27,14 +27,14 @@ struct ControllerCommand {
 fn main() {
     println!("Hello, world!");
 
-    let mut rnd_gen = rand::thread_rng();
+    let mut rnd_gen = rand::rng();
 
-    let controller_id = rnd_gen.gen();
+    let controller_id = rnd_gen.random();
     let from_ip_address = "127.0.0.1";
     let from_port_number = 62007;
 
     let hello = ControllerCommand {
-        id: rnd_gen.gen(),
+        id: rnd_gen.random(),
         controller_id,
         from_ip_address: from_ip_address.to_string(),
         from_port_number,
@@ -42,7 +42,7 @@ fn main() {
     };
 
     let reload = ControllerCommand {
-        id: rnd_gen.gen(),
+        id: rnd_gen.random(),
         controller_id,
         from_ip_address: from_ip_address.to_string(),
         from_port_number,

@@ -1,7 +1,7 @@
 [package]
 name = "server"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,12 +12,13 @@ actix-files = "*"
 actix-web = "*"
 actix-web-actors = "*"
 actix-rt = "*"
-html5ever = "*"
-markup5ever = "*"
-markup5ever_rcdom = "*"
+html5ever = { git = "https://github.com/servo/html5ever.git", branch = "main" }
+markup5ever = { git = "https://github.com/servo/html5ever.git", branch = "main" }
+markup5ever_rcdom = { git = "https://github.com/servo/html5ever.git", branch = "main" }
+xml5ever = { git = "https://github.com/servo/html5ever.git", branch = "main" }
 regex = "*"
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 urlencoding = "*"
 futures = "*"
 futures-util = "*"
